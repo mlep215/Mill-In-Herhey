@@ -37,13 +37,15 @@ async function fetchLocations(): Promise<{ locations: LocationRow[]; debug: stri
 
     if (rows.length) {
       rows.sort((a, b) => a.name.localeCompare(b.name));
-      return { locations: rows, debug: `Loaded from "${c.table}" (${c.id}, ${c.name})` };
+      return { locations: rows, debug: `Loaded locations from "${c.table}" (${c.id}, ${c.name})` };
     }
   }
 
   return {
     locations: [],
-    debug: `Could not load locations from common tables (locations/inventory_locations/alcohol_locations).`,
+    debug:
+      `Could not load locations from common tables. ` +
+      `If you have Row Level Security enabled, it may be blocking SELECT on locations.`,
   };
 }
 
@@ -67,13 +69,15 @@ async function fetchItems(): Promise<{ items: ItemRow[]; debug: string }> {
 
     if (rows.length) {
       rows.sort((a, b) => a.name.localeCompare(b.name));
-      return { items: rows, debug: `Loaded from "${c.table}" (${c.id}, ${c.name})` };
+      return { items: rows, debug: `Loaded items from "${c.table}" (${c.id}, ${c.name})` };
     }
   }
 
   return {
     items: [],
-    debug: `Could not load items from common tables (items/inventory_items/alcohol_items).`,
+    debug:
+      `Could not load items from common tables. ` +
+      `If you have Row Level Security enabled, it may be blocking SELECT on items.`,
   };
 }
 
@@ -81,6 +85,33 @@ const TABLES = {
   countBatches: "inventory_count_batches",
   counts: "inventory_counts",
 };
+
+// Turn your stored location names into the button labels you want
+function prettyLocationLabel(name: string) {
+  const n = name.trim().toLowerCase();
+
+  // common patterns
+  if (n === "bar 1" || n === "floor 1" || n.includes("bar 1") || n.includes("floor 1")) return "Floor 1";
+  if (n === "bar 2" || n === "floor 2" || n.includes("bar 2") || n.includes("floor 2")) return "Floor 2";
+  if (n === "bar 3" || n === "floor 3" || n.includes("bar 3") || n.includes("floor 3")) return "Floor 3";
+  if (n.includes("liquor") && n.includes("cabinet")) return "Liquor Cabinet";
+
+  // fallback = show whatever is in DB
+  return name;
+}
+
+// Sort so your buttons appear in the order you expect
+function sortLocationsForButtons(a: LocationRow, b: LocationRow) {
+  const order = (label: string) => {
+    const l = prettyLocationLabel(label).toLowerCase();
+    if (l === "liquor cabinet") return 0;
+    if (l === "floor 1") return 1;
+    if (l === "floor 2") return 2;
+    if (l === "floor 3") return 3;
+    return 99;
+  };
+  return order(a.name) - order(b.name) || a.name.localeCompare(b.name);
+}
 
 export default function WeeklyCountPage() {
   const [loading, setLoading] = useState(true);
@@ -115,22 +146,28 @@ export default function WeeklyCountPage() {
       }
 
       const [locRes, itemRes] = await Promise.all([fetchLocations(), fetchItems()]);
-      setLocations(locRes.locations);
-      setItems(itemRes.items);
 
+      const locsSorted = [...locRes.locations].sort(sortLocationsForButtons);
+
+      setLocations(locsSorted);
+      setItems(itemRes.items);
       setDebug(`${locRes.debug} | ${itemRes.debug}`);
 
-      if (!selectedLocationId && locRes.locations.length) {
-        setSelectedLocationId(locRes.locations[0].id);
+      // pick default location
+      if (!selectedLocationId && locsSorted.length) {
+        setSelectedLocationId(locsSorted[0].id);
       }
 
-      if (locRes.locations.length === 0) {
-        setError("No locations found for count dropdown. Check your locations table name/permissions.");
+      if (locsSorted.length === 0) {
+        setError(
+          "Locations are not loading, so the buttons can't show. This usually means the locations table name is different, " +
+            "or database permissions (Row Level Security) are blocking reads."
+        );
       } else if (itemRes.items.length === 0) {
         setError("No items found to count. Check your items table name/permissions.");
       }
 
-      // initialize rows for all items (blank inputs)
+      // initialize blank rows for ALL items
       const initRows: Record<string, RowState> = {};
       for (const it of itemRes.items) {
         initRows[it.id] = { bottles: "", ounces: "" };
@@ -146,7 +183,8 @@ export default function WeeklyCountPage() {
     if (!selectedLocationId) return;
 
     (async () => {
-      setError(null);
+      // Don't wipe error if it's the "no locations" error, but otherwise clear
+      setError((prev) => (prev?.includes("Locations are not loading") ? prev : null));
 
       const { data, error: loadErr } = await supabase
         .from(TABLES.counts)
@@ -157,7 +195,7 @@ export default function WeeklyCountPage() {
 
       if (loadErr) {
         setError(
-          `Could not load previous counts (this does NOT stop you from counting, but it won’t show last values): ${loadErr.message}`
+          `Could not load previous counts (you can still enter counts, but last values won't show): ${loadErr.message}`
         );
         setLatestCounts({});
         return;
@@ -239,7 +277,7 @@ export default function WeeklyCountPage() {
 
     if (batchErr) {
       setError(
-        `Create batch failed. This usually means the table "${TABLES.countBatches}" doesn’t exist yet or permissions block it. Error: ${batchErr.message}`
+        `Create batch failed. Table "${TABLES.countBatches}" may not exist yet or permissions block it. Error: ${batchErr.message}`
       );
       setSaving(false);
       return;
@@ -292,9 +330,7 @@ export default function WeeklyCountPage() {
 
       <div>
         <h1 className="text-2xl font-semibold">Weekly Inventory Count</h1>
-        <p className="text-sm opacity-80">
-          All items are shown with blanks. Leave blank if you didn’t count it.
-        </p>
+        <p className="text-sm opacity-80">All items are shown with blanks. Leave blank if you didn’t count it.</p>
         <p className="text-xs opacity-60 mt-1">{debug}</p>
       </div>
 
@@ -302,26 +338,43 @@ export default function WeeklyCountPage() {
         <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">{error}</div>
       )}
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1">
-          <label className="text-sm font-medium">Location</label>
-          <select
-            className="border rounded px-3 py-2"
-            value={selectedLocationId}
-            onChange={(e) => setSelectedLocationId(e.target.value)}
-          >
-            {locations.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-              </option>
-            ))}
-          </select>
-        </div>
+      {/* Location Buttons */}
+      <div className="space-y-2">
+        <div className="text-sm font-medium">Location</div>
 
+        {locations.length > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {locations.map((loc) => {
+              const selected = loc.id === selectedLocationId;
+              return (
+                <button
+                  key={loc.id}
+                  type="button"
+                  onClick={() => setSelectedLocationId(loc.id)}
+                  className={[
+                    "rounded px-4 py-3 border text-left",
+                    selected ? "bg-black text-white border-black" : "bg-white hover:bg-gray-50",
+                  ].join(" ")}
+                >
+                  <div className="text-sm font-semibold">{prettyLocationLabel(loc.name)}</div>
+                  <div className="text-xs opacity-70">{loc.name}</div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-sm opacity-80">
+            No locations loaded — once locations load, you’ll see Floor 1 / Floor 2 / Floor 3 / Liquor Cabinet buttons
+            here.
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3 pt-2">
         <button
           className="rounded bg-black text-white px-4 py-2 disabled:opacity-50"
           onClick={saveCount}
-          disabled={saving}
+          disabled={saving || !selectedLocationId}
         >
           {saving ? "Saving…" : "Save Weekly Count"}
         </button>
