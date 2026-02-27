@@ -1,81 +1,88 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { supabase } from "@/lib/supabaseClient";
 
-type LocationOption = { id: string; name: string };
-
-const LOCATIONS: LocationOption[] = [
-  { id: "bar-one", name: "Bar One" },
-  { id: "bar-two", name: "Bar Two" },
-  { id: "bar-three", name: "Bar Three" },
-  { id: "liquor-cabinet", name: "Liquor Cabinet" },
-];
+type Location = {
+  id: string;
+  name: string;
+};
 
 export default function NewSessionPage() {
-  const router = useRouter();
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  function handlePickLocation(locationId: string) {
-    const sessionId = crypto.randomUUID();
-    router.push(`/alcohol/session/${sessionId}/location/${locationId}`);
+  useEffect(() => {
+    loadLocations();
+  }, []);
+
+  async function loadLocations() {
+    const { data, error } = await supabase
+      .from("locations")
+      .select("*")
+      .order("name");
+
+    if (!error && data) {
+      setLocations(data);
+    }
+
+    setLoading(false);
+  }
+
+  if (loading) {
+    return (
+      <div className="p-6 text-lg">
+        Loading locations...
+      </div>
+    );
   }
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        backgroundColor: "#f4f4f5",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontFamily: "sans-serif",
-        padding: 24,
-      }}
-    >
-      <div
-        style={{
-          background: "white",
-          padding: 30,
-          borderRadius: 12,
-          width: 440,
-          boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
-        }}
-      >
-        <h1 style={{ fontSize: 24, fontWeight: 700, color: "#111" }}>
-          Select Location
-        </h1>
-        <p style={{ marginTop: 8, color: "#444" }}>
-          Choose where you’re counting inventory.
-        </p>
+    <div className=" hookuporadial p-6 space-y-6">
 
-        <div style={{ marginTop: 18, display: "grid", gap: 12 }}>
-          {LOCATIONS.map((loc) => (
-            <button
-              key={loc.id}
-              onClick={() => handlePickLocation(loc.id)}
-              style={{
-                padding: 14,
-                borderRadius: 8,
-                border: "1px solid #ddd",
-                background: "#fafafa",
-                color: "#111",
-                fontSize: 16,
-                fontWeight: 700,
-                cursor: "pointer",
-                textAlign: "left",
-              }}
-            >
-              {loc.name}
-              <div style={{ marginTop: 4, fontSize: 12, color: "#666" }}>
-                {loc.id}
-              </div>
-            </button>
-          ))}
-        </div>
+      {/* ===== TOP NAVIGATION ===== */}
+      <div className="flex gap-3">
+        <Link
+          href="/alcohol/count"
+          className="rounded bg-black text-white px-4 py-2"
+        >
+          Weekly Count
+        </Link>
 
-        <div style={{ marginTop: 18, fontSize: 12, color: "#666" }}>
-          This will create a new session ID and route you into that location.
-        </div>
+        <Link
+          href="/alcohol/new-session"
+          className="rounded border px-4 py-2"
+        >
+          New Session
+        </Link>
       </div>
-    </main>
+
+      {/* ===== PAGE TITLE ===== */}
+      <div>
+        <h1 className="text-2xl font-semibold">
+          Alcohol — New Session
+        </h1>
+        <p className="text-sm opacity-70">
+          Choose a location to begin inventory session.
+        </p>
+      </div>
+
+      {/* ===== LOCATION CARDS ===== */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {locations.map((location) => (
+          <Link
+            key={location.id}
+            href={`/alcohol/session/location/${location.id}`}
+            className="border rounded-lg p-6 hover:bg-gray-50 transition"
+          >
+            <div className="text-lg font-medium">
+              {location.name}
+            </div>
+          </Link>
+        ))}
+      </div>
+
+    </div>
   );
 }
